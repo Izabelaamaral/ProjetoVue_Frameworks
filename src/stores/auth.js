@@ -1,38 +1,69 @@
-// stores/auth.js — PARTE 2: Autenticação Google com Pinia
 import { defineStore } from 'pinia'
 import { ref, computed } from 'vue'
+import {
+  signInWithPopup,
+  signOut as firebaseSignOut,
+  onAuthStateChanged,
+} from 'firebase/auth'
+import { auth, googleProvider } from '../firebase'
+
+const BACKEND_URL = 'http://localhost:3001'
 
 export const useAuthStore = defineStore('auth', () => {
-  // Estado
   const user    = ref(null)
   const loading = ref(false)
+  const idToken = ref(null)
 
-  // Computed
   const isAuthenticated = computed(() => user.value !== null)
 
-  // Actions
-  async function loginWithGoogle(email) {
-    loading.value = true
-    // Simula latência do OAuth do Google
-    await new Promise(r => setTimeout(r, 1000))
-
-    const raw  = email.split('@')[0].replace(/[._\-]/g, ' ')
-    const name = raw.split(' ')
-      .map(w => w ? w[0].toUpperCase() + w.slice(1) : '')
-      .join(' ')
-      .trim()
-
-    user.value = {
-      email,
-      name,
-      avatar: `https://ui-avatars.com/api/?name=${encodeURIComponent(name)}&background=1976D2&color=fff&size=128`,
+  onAuthStateChanged(auth, async (firebaseUser) => {
+    if (firebaseUser) {
+      user.value = {
+        name:   firebaseUser.displayName,
+        email:  firebaseUser.email,
+        avatar: firebaseUser.photoURL,
+        uid:    firebaseUser.uid,
+      }
+      idToken.value = await firebaseUser.getIdToken()
+    } else {
+      user.value = null
+      idToken.value = null
     }
-    loading.value = false
+  })
+
+  async function loginWithGoogle() {
+    loading.value = true
+    try {
+      const result = await signInWithPopup(auth, googleProvider)
+      idToken.value = await result.user.getIdToken()
+
+      // Envia o token para o backend validar (Passo 4)
+      await enviarTokenParaBackend(idToken.value)
+    } catch (err) {
+      console.error('Erro no login com Google:', err)
+      throw err
+    } finally {
+      loading.value = false
+    }
+  }
+
+  async function enviarTokenParaBackend(token) {
+    try {
+      const res = await fetch(`${BACKEND_URL}/api/auth/verify`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ idToken: token }),
+      })
+      const data = await res.json()
+      console.log('✅ Backend validou o token:', data)
+    } catch (err) {
+      console.warn('⚠️ Backend não respondeu. Ele está rodando? (npm run dev na pasta server)', err)
+    }
   }
 
   function logout() {
-    user.value = null
+    firebaseSignOut(auth)
   }
 
-  return { user, loading, isAuthenticated, loginWithGoogle, logout }
+  return { user, loading, idToken, isAuthenticated, loginWithGoogle, logout }
 })
